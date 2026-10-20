@@ -9,6 +9,7 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "numpy<2.3",
     "pandas>=2.0",
+    "scipy",
     "statsmodels",
     "matplotlib",
     "pyyaml",
