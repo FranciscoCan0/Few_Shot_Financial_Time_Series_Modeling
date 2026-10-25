@@ -1,0 +1,63 @@
+{
+  "arrays_path": "data/processed/xtrend_arrays.npz",
+
+  "sequences": {
+    "target_length": 126,
+    "warmup_length": 63,
+    "train_stride": 1,
+    "test_stride": 63
+  },
+
+  "context": {
+    "method": "cpd",
+    "size": 10,
+    "length": 21,
+    "anytime_in_training": false
+  },
+
+  "architecture": {
+    "attention_heads": 4,
+    "attention_dim_equals_hidden": true
+  },
+
+  "training": {
+    "optimizer": "adam",
+    "learning_rate": 0.001,
+    "max_epochs": 100,
+    "early_stopping_patience": 10,
+    "validation_fraction": 0.1,
+    "search_iterations": 10,
+    "n_seeds": 10,
+    "seed": 0
+  },
+
+  "search_space": {
+    "dropout": [0.3, 0.4, 0.5],
+    "hidden_size": [64, 128],
+    "batch_size": [64, 128],
+    "max_grad_norm": [0.01, 1.0, 100.0]
+  },
+
+  "losses": {
+    "sharpe": {},
+    "gaussian": {"alpha": 1},
+    "quantile": {"alpha": 5,
+                 "quantiles": [0.01, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99]}
+  },
+
+  "backtest": {
+    "train_start": "1990-01-01",
+    "first_test_start": "1995-01-01",
+    "test_years": 5,
+    "test_end": "2023-12-31",
+    "vol_target": 0.15,
+    "transaction_cost": 0
+  },
+
+  "zero_shot": {
+    "enabled": false,
+    "n_test_assets": 20,
+    "seed": 0,
+    "test_assets": []
+  }
+}
