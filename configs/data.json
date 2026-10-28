@@ -2,7 +2,7 @@
   "wrds_username": "temp",
   "wrds_library": "trdstrm",
   "start_date": "1988-01-01",
-  "end_date": "2023-12-31",
+  "end_date": "2025-12-31",
   "roll_buffer_calendar_days": 7,
   "raw_path": "data/raw/futures_close.parquet",
   "processed_path": "data/processed/xtrend_features.parquet",
