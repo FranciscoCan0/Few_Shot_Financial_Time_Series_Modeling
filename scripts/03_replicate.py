@@ -10,9 +10,17 @@ period with it, and compare against the Long, TSMOM and MACD benchmarks.
     python scripts/03_replicate.py --live                           # watch it in Streamlit:
     streamlit run scripts/07_streamlit_dashboard.py                 # in a second terminal
 
+    python scripts/03_replicate.py --all                            # every variant, one by one
+
 The context method, size and length, the search space and the training settings come from
 configs/model.json; the flags below only shrink the run. The full paper setting trains
 n_seeds x search_iterations = 100 models per window, which needs a GPU.
+
+--all runs, for each loss, the baseline and X-Trend with every context in data.json
+(CPD and final hidden state at each length, time-equivalent, each context size): 48 runs
+with the default data.json. Variants with results in tables/ are skipped, so after a stop
+the same command picks up where it left off (the unfinished variant starts over). At the
+end, tables/sweep_summary.csv has every run's metrics next to the benchmarks'.
 
 Writes to results/replication/:
   tables/<run>_predictions.parquet   ensemble positions (and forecasts) per test day
@@ -55,16 +63,16 @@ OUT = ROOT / "results" / "replication"
 PERIODS = {"2018-2023": ("2018-01-01", None)}
 
 
-def run_name(args, mcfg):
-    if args.model == "baseline":
-        name = f"baseline_{args.loss}"
+def run_name(model, loss, quick, mcfg):
+    if model == "baseline":
+        name = f"baseline_{loss}"
     else:
         c = mcfg["context"]
         length = "" if c["method"] == "time_equivalent" else c["length"]
-        name = f"xtrend_{args.loss}_{c['method']}{length}_c{c['size']}"
+        name = f"xtrend_{loss}_{c['method']}{length}_c{c['size']}"
     if mcfg["zero_shot"]["enabled"]:
         name += "_zeroshot"
-    return name + ("_quick" if args.quick else "")
+    return name + ("_quick" if quick else "")
 
 
 class Live:
@@ -113,41 +121,30 @@ class Live:
         self.windows_done.append(self.year)
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Replicate X-Trend on expanding windows.")
-    parser.add_argument("--model", choices=["xtrend", "baseline"], default="xtrend")
-    parser.add_argument("--loss", choices=list(T.M.LOSSES), default="sharpe",
-                        help="sharpe: X-Trend / Baseline, gauss: X-Trend-G, qre: X-Trend-Q")
-    parser.add_argument("--windows", type=int, nargs="+",
-                        help="window numbers to run (0 = test 1995-2000); default all")
-    parser.add_argument("--seeds", type=int, help="override training.n_seeds")
-    parser.add_argument("--search-iterations", type=int,
-                        help="override training.search_iterations")
-    parser.add_argument("--max-epochs", type=int, help="override training.max_epochs")
-    parser.add_argument("--max-steps-per-epoch", type=int,
-                        help="cap batches per epoch (default: every training sequence)")
-    parser.add_argument("--device", default="auto", help="auto, cpu, cuda or mps")
-    parser.add_argument("--quick", action="store_true",
-                        help="smoke test: 1 seed, 1 setting, 2 epochs of 20 batches, "
-                             "first window only")
-    parser.add_argument("--live", action="store_true",
-                        help="write progress files for 07_streamlit_dashboard.py")
-    args = parser.parse_args()
-    if args.quick:
-        args.seeds, args.search_iterations = args.seeds or 1, args.search_iterations or 1
-        args.max_epochs = args.max_epochs or 2
-        args.max_steps_per_epoch = args.max_steps_per_epoch or 20
-        args.windows = args.windows or [0]
+def all_runs(cfg, mcfg):
+    """(model, loss, model config) for every variant: for each loss, the baseline and X-Trend
+    with every context method, length and size data.json allows."""
+    x = cfg["contexts"]
+    contexts = ([("cpd", L) for L in x["cpd_max_lengths"]]
+                + [("final_hidden", L) for L in x["final_hidden_lengths"]]
+                + [("time_equivalent", mcfg["context"]["length"])])   # length unused
+    runs = []
+    for loss in T.M.LOSSES:
+        runs.append(("baseline", loss, mcfg))
+        for method, length in contexts:
+            for size in x["sizes"]:
+                m = copy.deepcopy(mcfg)
+                m["context"].update(method=method, length=length, size=size)
+                V.validate_model_config(m, cfg)
+                runs.append(("xtrend", loss, m))
+    return runs
 
-    cfg = features.load_config()
-    mcfg = copy.deepcopy(V.load_model_config(data_cfg=cfg))
-    if args.max_epochs:
-        mcfg["training"]["max_epochs"] = args.max_epochs
-    arrays = V.load_arrays(cfg, mcfg)
+
+def replicate(args, model, loss, mcfg, cfg, arrays, device):
+    """Train, trade and score one variant on the chosen windows; return its run name."""
     windows = V.expanding_windows(mcfg)
     chosen = args.windows if args.windows is not None else range(len(windows))
-    device = T.pick_device(args.device)
-    name = run_name(args, mcfg)
+    name = run_name(model, loss, args.quick, mcfg)
     for d in ["tables", "figures", f"models/{name}"]:
         (OUT / d).mkdir(parents=True, exist_ok=True)
     print(f"run {name} on {device}")
@@ -164,13 +161,13 @@ def main():
             if live:
                 live.year = str(w["test_start"])[:4]
                 live.status(f"test {live.year}: building batches", force=True)
-            ensemble, log = T.train_window(arrays, w, mcfg, cfg, args.model, args.loss, device,
+            ensemble, log = T.train_window(arrays, w, mcfg, cfg, model, loss, device,
                                            args.seeds, args.search_iterations,
                                            args.max_steps_per_epoch,
                                            log=live.log if live else print,
                                            on_epoch=live.epoch if live else None)
-            for k, model in enumerate(ensemble):
-                torch.save(model.state_dict(),
+            for k, m in enumerate(ensemble):
+                torch.save(m.state_dict(),
                            OUT / "models" / name / f"test{str(w['test_start'])[:4]}_model{k}.pt")
             if live:
                 live.status(f"test {live.year}: trading the test period", force=True)
@@ -210,6 +207,80 @@ def main():
     if live:
         live.status(f"finished {len(preds)} windows", state="done", force=True)
     print(f"\nsaved results/replication/tables/{name}_*.csv/.parquet and figures/{name}_returns.png")
+    return name
+
+
+def summarize(names, path):
+    """One row per finished run: its metrics next to the benchmarks' (same test days)."""
+    rows = []
+    for name in names:
+        table = pd.read_csv(OUT / "tables" / f"{name}_metrics.csv")
+        for _, r in table.iterrows():
+            rows.append({"run": name, **r.to_dict()})
+    if rows:
+        out = pd.DataFrame(rows)
+        out.to_csv(path, index=False)
+        mine = out[out["run"] == out["strategy"]].sort_values(["period", "sharpe"],
+                                                               ascending=[True, False])
+        print("\n" + mine[["run", "period", "sharpe", "annual_return", "max_drawdown"]]
+              .round(3).to_string(index=False))
+        print(f"\nsaved {path.relative_to(ROOT)}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Replicate X-Trend on expanding windows.")
+    parser.add_argument("--model", choices=["xtrend", "baseline"], default="xtrend")
+    parser.add_argument("--loss", choices=list(T.M.LOSSES), default="sharpe",
+                        help="sharpe: X-Trend / Baseline, gauss: X-Trend-G, qre: X-Trend-Q")
+    parser.add_argument("--windows", type=int, nargs="+",
+                        help="window numbers to run (0 = test 1995-2000); default all")
+    parser.add_argument("--seeds", type=int, help="override training.n_seeds")
+    parser.add_argument("--search-iterations", type=int,
+                        help="override training.search_iterations")
+    parser.add_argument("--max-epochs", type=int, help="override training.max_epochs")
+    parser.add_argument("--max-steps-per-epoch", type=int,
+                        help="cap batches per epoch (default: every training sequence)")
+    parser.add_argument("--device", default="auto", help="auto, cpu, cuda or mps")
+    parser.add_argument("--quick", action="store_true",
+                        help="smoke test: 1 seed, 1 setting, 2 epochs of 20 batches, "
+                             "first window only")
+    parser.add_argument("--live", action="store_true",
+                        help="write progress files for 07_streamlit_dashboard.py")
+    parser.add_argument("--all", action="store_true",
+                        help="every variant in turn (ignores --model and --loss); finished "
+                             "runs are skipped, so rerunning resumes the sweep")
+    parser.add_argument("--redo", action="store_true",
+                        help="with --all: rerun variants that already have results")
+    args = parser.parse_args()
+    if args.quick:
+        args.seeds, args.search_iterations = args.seeds or 1, args.search_iterations or 1
+        args.max_epochs = args.max_epochs or 2
+        args.max_steps_per_epoch = args.max_steps_per_epoch or 20
+        args.windows = args.windows or [0]
+
+    cfg = features.load_config()
+    mcfg = copy.deepcopy(V.load_model_config(data_cfg=cfg))
+    if args.max_epochs:
+        mcfg["training"]["max_epochs"] = args.max_epochs
+    arrays = V.load_arrays(cfg, mcfg)
+    device = T.pick_device(args.device)
+
+    if not args.all:
+        replicate(args, args.model, args.loss, mcfg, cfg, arrays, device)
+        return
+
+    runs = all_runs(cfg, mcfg)
+    names = [run_name(model, loss, args.quick, m) for model, loss, m in runs]
+    print(f"sweep: {len(runs)} variants on {device}")
+    for k, ((model, loss, m), name) in enumerate(zip(runs, names), 1):
+        if not args.redo and (OUT / "tables" / f"{name}_metrics.csv").exists():
+            print(f"[{k}/{len(runs)}] {name}: already done, skipping")
+            continue
+        print(f"\n[{k}/{len(runs)}] {name}")
+        replicate(args, model, loss, m, cfg, arrays, device)
+    summary = "sweep_summary" + ("_quick" if args.quick else "") + ".csv"
+    summarize([n for n in names if (OUT / "tables" / f"{n}_metrics.csv").exists()],
+              OUT / "tables" / summary)
 
 
 if __name__ == "__main__":

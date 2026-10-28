@@ -99,6 +99,21 @@ the search, and Performance fills in as each window finishes. Once the run is do
 dashboard switches to the final results, and the Training tab shows every model's
 validation loss and which ones made the ensemble.
 
+To run every variant in the paper one after another, use `--all`:
+
+```bash
+python scripts/03_replicate.py --all --live --device mps
+```
+
+For each loss (Sharpe, Gaussian, quantile) that's the baseline plus X-Trend with every
+context type and size: CPD 21/63, final hidden state 21/63 and time-equivalent, each
+with 10, 20 and 30 contexts. That makes 48 runs. Runs that already have results get
+skipped, so if it stops you can run the same command again and it picks up where it
+left off. Only the run that was in progress starts over. When it finishes,
+`results/replication/tables/sweep_summary.csv` lists every run's metrics next to the
+benchmarks'. The other flags (`--seeds`, `--search-iterations`, `--max-steps-per-epoch`,
+...) apply to every run in the sweep. Add `--redo` to rerun finished runs.
+
 ### 4. Extensions
 
 `scripts/04_extend.py` is a placeholder. The POTENTIAL ideas in it are:
