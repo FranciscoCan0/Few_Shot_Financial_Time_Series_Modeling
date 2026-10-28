@@ -1,6 +1,6 @@
 # Few-Shot Financial Time Series Modeling
 
-[Replication of X-Trend (Wood et al., 2023)](https://arxiv.org/abs/2310.10500): a trend-following model for futures that
+Replication of [X-Trend (Wood et al., 2023)](https://arxiv.org/abs/2310.10500): a trend-following model for futures that
 looks at a "context set" of past regimes from other assets before taking a position.
 We use daily front-month prices for 50 futures from WRDS (Datastream), 1990-2023, and
 compare against Long, TSMOM and MACD benchmarks.
