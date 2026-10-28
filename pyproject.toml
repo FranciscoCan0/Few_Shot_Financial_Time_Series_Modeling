@@ -15,7 +15,9 @@ dependencies = [
     "pyyaml",
     "wrds",
     "torch",
-    "pyarrow>=16"
+    "pyarrow>=16",
+    "streamlit",
+    "plotly"
 ]
 
 [project.optional-dependencies]
