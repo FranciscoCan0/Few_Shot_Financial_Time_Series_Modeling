@@ -86,6 +86,19 @@ Output goes to `results/replication/`:
 - return and drawdown plots in `figures/`
 - model weights in `models/`
 
+To watch the search in the Streamlit dashboard while it runs, add `--live` and start
+`07` in a second terminal:
+
+```bash
+python scripts/03_replicate.py --model xtrend --loss sharpe --live    # terminal 1
+streamlit run scripts/07_streamlit_dashboard.py                      # terminal 2
+```
+
+While it trains, the Training tab shows train/val loss and val Sharpe for every model in
+the search, and Performance fills in as each window finishes. Once the run is done, the
+dashboard switches to the final results, and the Training tab shows every model's
+validation loss and which ones made the ensemble.
+
 ### 4. Extensions
 
 `scripts/04_extend.py` is a placeholder. The POTENTIAL ideas in it are:

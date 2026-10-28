@@ -7,6 +7,9 @@ period with it, and compare against the Long, TSMOM and MACD benchmarks.
     python scripts/03_replicate.py --model baseline                 # no context set
     python scripts/03_replicate.py --quick                          # minutes: a smoke test
 
+    python scripts/03_replicate.py --live                           # watch it in Streamlit:
+    streamlit run scripts/07_streamlit_dashboard.py                 # in a second terminal
+
 The context method, size and length, the search space and the training settings come from
 configs/model.json; the flags below only shrink the run. The full paper setting trains
 n_seeds x search_iterations = 100 models per window, which needs a GPU.
@@ -19,9 +22,14 @@ Writes to results/replication/:
   figures/<run>_returns.png          cumulative return, rolling Sharpe, drawdown and
                                      rolling max drawdown over time (15% vol)
   models/<run>/                      the kept models' weights per window
+With --live, also results/replication/live/<run>_status.json, <run>.jsonl (one line per
+epoch of every model in the search) and <run>_predictions.parquet (finished windows), the
+files 07_streamlit_dashboard.py watches. Once the run finishes the dashboard shows the
+tables/ version instead.
 """
 import argparse
 import copy
+import json
 import sys
 import time
 from pathlib import Path
@@ -59,6 +67,52 @@ def run_name(args, mcfg):
     return name + ("_quick" if args.quick else "")
 
 
+class Live:
+    """Progress files for 07_streamlit_dashboard.py, in the format 06_backtest_dashboard.py
+    writes: a status file (rewritten at most every 3 seconds unless forced), one jsonl line
+    per epoch, and the predictions of the finished windows."""
+
+    def __init__(self, name, years, device, args):
+        self.dir = OUT / "live"
+        self.dir.mkdir(parents=True, exist_ok=True)
+        self.status_path = self.dir / f"{name}_status.json"
+        self.log_path = self.dir / f"{name}.jsonl"
+        self.pred_path = self.dir / f"{name}_predictions.parquet"
+        self.log_path.write_text("")
+        self.pred_path.unlink(missing_ok=True)
+        self.name, self.years, self.device, self.args = name, years, device, args
+        self.year, self.windows_done = None, []
+        self.t0, self.last = time.time(), 0.0
+        self.started = time.strftime("%Y-%m-%dT%H:%M:%S")
+
+    def status(self, text, state="running", force=False):
+        if not force and time.time() - self.last < 3:
+            return
+        self.last = time.time()
+        s = {"name": self.name, "state": state, "status": text, "started": self.started,
+             "updated": time.strftime("%Y-%m-%dT%H:%M:%S"),
+             "minutes": round((time.time() - self.t0) / 60, 2), "windows": self.years,
+             "windows_done": self.windows_done, "device": str(self.device),
+             "settings": vars(self.args)}
+        tmp = self.status_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(s, indent=1))
+        tmp.replace(self.status_path)                # never leave a half-written file
+
+    def log(self, text):
+        print(text)
+        self.status(f"test {self.year}: {text.strip()}")
+
+    def epoch(self, repeat, setting, **e):
+        with open(self.log_path, "a") as f:
+            f.write(json.dumps({"test_start": self.year, "seed": repeat, "setting": setting,
+                                "model": f"repeat {repeat} setting {setting}", **e,
+                                "minutes": (time.time() - self.t0) / 60}) + "\n")
+
+    def window_done(self, preds):
+        pd.concat(preds, ignore_index=True).to_parquet(self.pred_path)
+        self.windows_done.append(self.year)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Replicate X-Trend on expanding windows.")
     parser.add_argument("--model", choices=["xtrend", "baseline"], default="xtrend")
@@ -76,6 +130,8 @@ def main():
     parser.add_argument("--quick", action="store_true",
                         help="smoke test: 1 seed, 1 setting, 2 epochs of 20 batches, "
                              "first window only")
+    parser.add_argument("--live", action="store_true",
+                        help="write progress files for 07_streamlit_dashboard.py")
     args = parser.parse_args()
     if args.quick:
         args.seeds, args.search_iterations = args.seeds or 1, args.search_iterations or 1
@@ -95,22 +151,42 @@ def main():
     for d in ["tables", "figures", f"models/{name}"]:
         (OUT / d).mkdir(parents=True, exist_ok=True)
     print(f"run {name} on {device}")
+    live = (Live(name, [str(windows[i]["test_start"])[:4] for i in chosen], device, args)
+            if args.live else None)
 
     preds, logs = [], []
-    for i in chosen:
-        w = windows[i]
-        print(f"window {i}: train from {w['train_start']}, test {w['test_start']} "
-              f"to {w['test_end']}")
-        t0 = time.time()
-        ensemble, log = T.train_window(arrays, w, mcfg, cfg, args.model, args.loss, device,
-                                       args.seeds, args.search_iterations,
-                                       args.max_steps_per_epoch)
-        for k, model in enumerate(ensemble):
-            torch.save(model.state_dict(),
-                       OUT / "models" / name / f"test{str(w['test_start'])[:4]}_model{k}.pt")
-        preds.append(T.predict(ensemble, arrays, w, mcfg, cfg, device))
-        logs.append(log)
-        print(f"  done in {(time.time() - t0) / 60:.1f} min")
+    try:
+        for i in chosen:
+            w = windows[i]
+            print(f"window {i}: train from {w['train_start']}, test {w['test_start']} "
+                  f"to {w['test_end']}")
+            t0 = time.time()
+            if live:
+                live.year = str(w["test_start"])[:4]
+                live.status(f"test {live.year}: building batches", force=True)
+            ensemble, log = T.train_window(arrays, w, mcfg, cfg, args.model, args.loss, device,
+                                           args.seeds, args.search_iterations,
+                                           args.max_steps_per_epoch,
+                                           log=live.log if live else print,
+                                           on_epoch=live.epoch if live else None)
+            for k, model in enumerate(ensemble):
+                torch.save(model.state_dict(),
+                           OUT / "models" / name / f"test{str(w['test_start'])[:4]}_model{k}.pt")
+            if live:
+                live.status(f"test {live.year}: trading the test period", force=True)
+            preds.append(T.predict(ensemble, arrays, w, mcfg, cfg, device))
+            logs.append(log)
+            if live:
+                live.window_done(preds)
+            print(f"  done in {(time.time() - t0) / 60:.1f} min")
+    except KeyboardInterrupt:
+        if live:
+            live.status(f"stopped after {len(preds)} windows", state="stopped", force=True)
+        raise
+    except Exception as e:
+        if live:
+            live.status(f"error: {e!r}", state="error", force=True)
+        raise
 
     pred = pd.concat(preds, ignore_index=True)
     pred.to_parquet(OUT / "tables" / f"{name}_predictions.parquet")
@@ -131,6 +207,8 @@ def main():
     P.performance_by_year(daily).to_csv(OUT / "tables" / f"{name}_sharpe_by_year.csv")
     fig = P.plot_performance(daily, title=name, path=OUT / "figures" / f"{name}_returns.png")
     plt.close(fig)
+    if live:
+        live.status(f"finished {len(preds)} windows", state="done", force=True)
     print(f"\nsaved results/replication/tables/{name}_*.csv/.parquet and figures/{name}_returns.png")
 
 

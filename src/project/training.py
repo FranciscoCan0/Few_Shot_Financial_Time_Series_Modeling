@@ -39,9 +39,10 @@ def _forward(model, t, zero_shot_target=False):
 
 
 @torch.no_grad()
-def evaluate_loss(model, batcher, loss, batch_size, device, seed=0):
-    """The loss over a whole split, pooled over every scored day (the Sharpe loss is not an
-    average of per-batch values). The same seed draws the same contexts every time."""
+def evaluate(model, batcher, loss, batch_size, device, seed=0):
+    """(loss, Sharpe ratio of the positions) over a whole split, pooled over every scored
+    day (the Sharpe loss is not an average of per-batch values). The same seed draws the
+    same contexts every time."""
     model.eval()
     outs, ys, masks = [], [], []
     for b in batcher.batches(batch_size, np.random.default_rng(seed), shuffle=False):
@@ -50,11 +51,18 @@ def evaluate_loss(model, batcher, loss, batch_size, device, seed=0):
         ys.append(t["y"].cpu())
         masks.append(t["score_mask"].cpu())
     out = {k: torch.cat([o[k] for o in outs]) for k in outs[0]}
-    return M.model_loss(out, torch.cat(ys), loss=loss, mask=torch.cat(masks)).item()
+    y, mask = torch.cat(ys), torch.cat(masks)
+    return (M.model_loss(out, y, loss=loss, mask=mask).item(),
+            -M.sharpe_loss(out["position"], y, mask=mask).item())
+
+
+def evaluate_loss(model, batcher, loss, batch_size, device, seed=0):
+    """The loss over a whole split (see evaluate)."""
+    return evaluate(model, batcher, loss, batch_size, device, seed)[0]
 
 
 def train_one(arrays, train, val, mcfg, kind, loss, hp, seed, device,
-              max_steps_per_epoch=None, log=print):
+              max_steps_per_epoch=None, log=print, on_epoch=None):
     """Train one model with settings `hp`; return (model at its best validation loss,
     best validation loss, validation loss per epoch).
 
@@ -62,6 +70,7 @@ def train_one(arrays, train, val, mcfg, kind, loss, hp, seed, device,
     training.max_epochs passes over the training sequences, stopping after
     training.early_stopping_patience epochs without a better validation loss.
     max_steps_per_epoch caps the batches per epoch (None: every sequence once).
+    on_epoch(epoch=, train_loss=, val_loss=, val_sharpe=) is called after every epoch.
     """
     t = mcfg["training"]
     torch.manual_seed(seed)
@@ -74,6 +83,7 @@ def train_one(arrays, train, val, mcfg, kind, loss, hp, seed, device,
     best, best_state, wait, history = np.inf, None, 0, []
     for epoch in range(t["max_epochs"]):
         model.train()
+        losses = []
         for step, b in enumerate(train.batches(hp["batch_size"], rng)):
             if max_steps_per_epoch and step >= max_steps_per_epoch:
                 break
@@ -84,9 +94,13 @@ def train_one(arrays, train, val, mcfg, kind, loss, hp, seed, device,
             batch_loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), hp["max_grad_norm"])
             opt.step()
+            losses.append(batch_loss.detach())
 
-        v = evaluate_loss(model, val, loss, hp["batch_size"], device, seed)
+        v, sharpe = evaluate(model, val, loss, hp["batch_size"], device, seed)
         history.append(v)
+        if on_epoch:
+            on_epoch(epoch=epoch + 1, train_loss=torch.stack(losses).mean().item(),
+                     val_loss=v, val_sharpe=sharpe)
         if np.isfinite(v) and v < best:
             best, best_state, wait = v, copy.deepcopy(model.state_dict()), 0
         else:
@@ -100,11 +114,12 @@ def train_one(arrays, train, val, mcfg, kind, loss, hp, seed, device,
 
 
 def train_window(arrays, window, mcfg, cfg, kind, loss, device, n_seeds=None,
-                 search_iterations=None, max_steps_per_epoch=None, log=print):
+                 search_iterations=None, max_steps_per_epoch=None, log=print, on_epoch=None):
     """The ensemble for one expanding window, and a log of every model trained.
 
     For each of n_seeds repeats: search_iterations random settings, keep the best by
     validation loss. Defaults come from model.json (paper: 10 repeats x 10 settings).
+    on_epoch gets train_one's per-epoch numbers plus repeat= and setting=.
     """
     t = mcfg["training"]
     n_seeds = n_seeds or t["n_seeds"]
@@ -122,8 +137,9 @@ def train_window(arrays, window, mcfg, cfg, kind, loss, device, n_seeds=None,
             hp = sample_hparams(mcfg, rng)
             seed = int(rng.integers(2 ** 31))
             log(f"    repeat {s + 1}/{n_seeds}, setting {i + 1}/{search_iterations}: {hp}")
+            report = on_epoch and (lambda s=s, i=i, **e: on_epoch(repeat=s, setting=i, **e))
             model, v, history = train_one(arrays, train, val, mcfg, kind, loss, hp, seed,
-                                          device, max_steps_per_epoch, log)
+                                          device, max_steps_per_epoch, log, report)
             rows.append({"test_start": str(window["test_start"]), "repeat": s, "setting": i,
                          **hp, "seed": seed, "val_loss": v, "epochs": len(history),
                          "kept": False})

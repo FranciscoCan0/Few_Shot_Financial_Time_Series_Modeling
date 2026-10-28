@@ -63,7 +63,11 @@ def runs():
     for p in LIVE.glob("*_status.json"):
         out.setdefault(p.name.removesuffix("_status.json"), {})["status"] = p
     for p in TABLES.glob("*_predictions.parquet"):
-        out[p.name.removesuffix("_predictions.parquet")] = {
+        name = p.name.removesuffix("_predictions.parquet")
+        status = out.get(name, {}).get("status")
+        if status and json.loads(status.read_text())["state"] == "running":
+            continue                                 # an 03_replicate.py --live run
+        out[name] = {
             "pred": p, "log": TABLES / p.name.replace("_predictions.parquet",
                                                       "_training_log.csv")}
     for name, f in out.items():
@@ -255,8 +259,8 @@ with tab_train:
         if log.empty:
             st.write("No finished epoch yet.")
         else:
-            log["run"] = "test " + log["test_start"].astype(str) + " seed " + \
-                log["seed"].astype(str)
+            who = log["model"] if "model" in log else "seed " + log["seed"].astype(str)
+            log["run"] = "test " + log["test_start"].astype(str) + " " + who
             c1, c2 = st.columns(2)
             for col, ax, title in [("val_loss", c1, "Validation loss per epoch"),
                                    ("val_sharpe", c2, "Validation Sharpe per epoch")]:
