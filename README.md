@@ -60,7 +60,7 @@ settings. Writes the following to `data/processed/`:
 ### 3. Replicate the paper
 
 ```bash
-python scripts/03_replicate.py --quick                     # smoke test, a few minutes
+python scripts/03_replicate.py --quick                     # a quick few minutes
 python scripts/03_replicate.py --model xtrend --loss sharpe  # X-Trend
 python scripts/03_replicate.py --model xtrend --loss gauss   # X-Trend-G
 python scripts/03_replicate.py --model xtrend --loss qre     # X-Trend-Q
@@ -88,13 +88,13 @@ Output goes to `results/replication/`:
 
 ### 4. Extensions
 
-`scripts/04_extend.py` is a placeholder. The ideas in it are:
+`scripts/04_extend.py` is a placeholder. The POTENTIAL ideas in it are:
 
-- extending the data to 2024-2026
+- extending the data to 2024-2026 (complete)
 - adding transaction costs
 - picking the futures by liquidity at the start of the sample
 
-### 5. Watch one model train
+### 5. Watch one model train (Preliminary test run for model training)
 
 ```bash
 python scripts/05_dashboard.py                       # X-Trend, test window 2005-2010
