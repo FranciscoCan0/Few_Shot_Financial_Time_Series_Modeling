@@ -192,3 +192,17 @@ src/project/
 scripts/              the numbered steps above
 notebooks/            exploration and checks on the data pipeline and arrays
 ```
+
+## Preliminary Replication Results
+
+> **Note:** these results come from a smaller hyperparameter search than the paper's.
+> The code can run all 48 variants with the paper's full search (`03_replicate.py --all`),
+> but training that many models on 20+ years of data would take weeks given we have access to one GPU. To have results
+> before submission, we trained the four main model types with the same reduced search.
+
+| Model     | Loss     | Sharpe | Ann. Return | Ann. Vol | Max Drawdown |
+|-----------|----------|--------|-------------|----------|--------------|
+| Baseline  | Sharpe   | TBD    | TBD         | TBD      | TBD          |
+| X-Trend   | Sharpe   | TBD    | TBD         | TBD      | TBD          |
+| X-Trend-G | Gaussian | TBD    | TBD         | TBD      | TBD          |
+| X-Trend-Q | Quantile | TBD    | TBD         | TBD      | TBD          |
