@@ -2,14 +2,18 @@
 
 Replication of [X-Trend (Wood et al., 2023)](https://arxiv.org/abs/2310.10500): a trend-following model for futures that
 looks at a "context set" of past regimes from other assets before taking a position.
-We use daily front-month prices for 50 futures from WRDS (Datastream), 1990-2023, and
-compare against Long, TSMOM and MACD benchmarks.
+We use daily front-month prices for 50 futures from WRDS (Datastream), 1990-2025 (49 have
+enough history to use), backtest 1995-2023, and compare against Long, TSMOM and MACD benchmarks.
+
+Team Members: Cole Pridgen, Francisco Canova, Noah Apteker
 
 Where things stand:
 
 - Data download, feature building and change-point detection (CPD) work.
 - X-Trend and the baseline model are implemented, with the Sharpe, Gaussian and quantile losses.
 - The walk-forward backtest and both dashboards run.
+- Preliminary results for the four main models are in [Preliminary Replication Results](#preliminary-replication-results)
+  (reduced training budget; full-budget runs pending).
 - Extensions (`04_extend.py`) haven't been picked yet.
 
 ## Setup
@@ -18,14 +22,20 @@ Needs Python 3.12.
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 ```
+
+On Windows with an NVIDIA GPU, install the CUDA build of PyTorch first
+(`pip install torch --index-url https://download.pytorch.org/whl/cu128`), otherwise
+training runs on the CPU.
 
 Put your WRDS username in `configs/data.json` (replace `"temp"`). The first download
 asks for your password.
 
-`data/` and `results/` are gitignored, so a fresh clone has to run steps 1 and 2.
+`data/` is gitignored, so a fresh clone has to run steps 1 and 2. The result tables and
+figures of the preliminary runs are committed in `results/replication/`; the large outputs
+(predictions, model weights, live progress files) are not.
 
 ## Running it
 
@@ -50,7 +60,8 @@ python scripts/02_build_dataset.py --regimes-only  # re-cut saved CPD scores, ta
 
 The CPD step fits a GP change-point model on every day for every asset, which is why
 it's slow. Run it once, then use `--skip-cpd` or `--regimes-only` when you change other
-settings. Writes the following to `data/processed/`:
+settings. `cpd.n_jobs` in `configs/data.json` sets how many CPU cores it uses. Writes the
+following to `data/processed/`:
 
 - `xtrend_features.parquet` (Volatility Scaled Returns, MACD Features, & Target Returns)
 - `cpd_scores.parquet`
@@ -80,6 +91,9 @@ Use these flags to cut the run down:
 - `--max-steps-per-epoch`
 - `--device cpu|cuda|mps`
 
+A reduced run saves under the same name as the full run of that variant (only `--quick`
+adds a suffix), so running the variant again overwrites it.
+
 Output goes to `results/replication/`:
 
 - metrics and Sharpe by year in `tables/`
@@ -97,7 +111,9 @@ streamlit run scripts/07_streamlit_dashboard.py                      # terminal 
 While it trains, the Training tab shows train/val loss and val Sharpe for every model in
 the search, and Performance fills in as each window finishes. Once the run is done, the
 dashboard switches to the final results, and the Training tab shows every model's
-validation loss and which ones made the ensemble.
+validation loss and which ones made the ensemble. On Windows, `--live` can crash a run if
+the dashboard is reading a progress file at the moment it is replaced, so leave it off for
+long unattended runs.
 
 To run every variant in the paper one after another, use `--all`:
 
@@ -118,7 +134,7 @@ benchmarks'. The other flags (`--seeds`, `--search-iterations`, `--max-steps-per
 
 `scripts/04_extend.py` is a placeholder. The POTENTIAL ideas in it are:
 
-- extending the data to 2024-2026 (complete)
+- extending the backtest to 2024-2025 (data already downloaded through 2025; not yet backtested)
 - adding transaction costs
 - picking the futures by liquidity at the start of the sample
 
@@ -165,6 +181,17 @@ strategies, dates, vol target and transaction cost. It has four tabs:
 - Assets
 - Training
 
+### 8. Main results table
+
+```bash
+python scripts/08_results_table.py --max-steps-per-epoch 300
+```
+
+Collects the four main runs (Baseline, X-Trend, X-Trend-G, X-Trend-Q) and the benchmarks
+into `results/replication/tables/main_results.md` / `.csv`, plus the hyperparameters each
+kept model used in `kept_hyperparameters.csv`. Runs that haven't finished are skipped.
+`--max-steps-per-epoch` only labels the table (the cap isn't saved in the training logs).
+
 ## Running modules directly
 
 The `src/project` modules also run on their own, which is handy for one step:
@@ -189,20 +216,82 @@ src/project/
   training.py                training loop, random search, ensembling, predictions
   evaluation.py              benchmarks, portfolio returns, metrics
   plotting.py                performance plots
-scripts/              the numbered steps above
+scripts/              the numbered steps above (08 builds the main results table)
 notebooks/            exploration and checks on the data pipeline and arrays
+results/replication/  tables/ and figures/ from 03_replicate.py and 08_results_table.py
 ```
 
 ## Preliminary Replication Results
 
-> **Note:** these results come from a smaller hyperparameter search than the paper's.
+> **Note:** these results come from a much smaller training budget than the paper's.
 > The code can run all 48 variants with the paper's full search (`03_replicate.py --all`),
-> but training that many models on 20+ years of data would take weeks given we have access to one GPU. To have results
-> before submission, we trained the four main model types with the same reduced search.
+> but training that many models on 30 years of data would take weeks on our single GPU.
+> To have results before submission, we trained the four main model types with the same
+> reduced settings (below). Treat the rankings as indicative, not final.
 
-| Model     | Loss     | Sharpe | Ann. Return | Ann. Vol | Max Drawdown |
-|-----------|----------|--------|-------------|----------|--------------|
-| Baseline  | Sharpe   | TBD    | TBD         | TBD      | TBD          |
-| X-Trend   | Sharpe   | TBD    | TBD         | TBD      | TBD          |
-| X-Trend-G | Gaussian | TBD    | TBD         | TBD      | TBD          |
-| X-Trend-Q | Quantile | TBD    | TBD         | TBD      | TBD          |
+**Out-of-sample performance, 1995-2023** (49 futures, scaled to 15% annual volatility, before transaction costs)
+
+| Model | Loss | Sharpe<br>1995-2023 | Sharpe<br>2018-2023 | Annual<br>return | Max<br>drawdown |
+|:---|:---|---:|---:|---:|---:|
+| Baseline (no context) | Sharpe | 1.66 | 1.70 | 24.9% | -31.7% |
+| **X-Trend** | Sharpe | **1.86** | **2.28** | **28.0%** | -35.6% |
+| X-Trend-G | Gaussian NLL + Sharpe | 0.53 | 0.59 | 8.0% | -93.1% |
+| X-Trend-Q | Quantile + Sharpe | 1.76 | 1.90 | 26.4% | -49.2% |
+| *Benchmarks* | | | | | |
+| Long | - | 0.80 | 0.55 | 12.1% | -49.7% |
+| TSMOM | - | 1.12 | 0.47 | 16.7% | -31.0% |
+| MACD | - | 0.94 | 0.64 | 14.2% | -31.8% |
+
+X-Trend models use a context set of 10 change-point (CPD) regimes, each up to 21 days long.
+Expanding windows train from 1990 and test in 5-year blocks. Best model in bold.
+
+### Training settings
+
+| | Paper | Ours |
+|---|---|---|
+| Ensemble size per window | 10 | 2 |
+| Hyperparameter settings tried per ensemble member | 10 | 1 (random draw) |
+| Batches per epoch | all training sequences | at most 300 |
+| Max epochs / early stopping | 100 / 10 | 100 / 10 |
+| Optimizer | Adam, lr 0.001 | Adam, lr 0.001 |
+
+Hyperparameters are drawn from dropout {0.3, 0.4, 0.5}, hidden size {64, 128}, batch size
+{64, 128} and max gradient norm {0.01, 1, 100}. The draws are seeded by window, so all
+four models used the same hyperparameters in each window. The kept settings per window are
+in `results/replication/tables/kept_hyperparameters.csv`.
+
+Commands (one per model):
+
+```bash
+python scripts/03_replicate.py --model baseline --seeds 2 --search-iterations 1 --max-steps-per-epoch 300
+python scripts/03_replicate.py --seeds 2 --search-iterations 1 --max-steps-per-epoch 300
+python scripts/03_replicate.py --loss gauss --seeds 2 --search-iterations 1 --max-steps-per-epoch 300
+python scripts/03_replicate.py --loss qre --seeds 2 --search-iterations 1 --max-steps-per-epoch 300
+python scripts/08_results_table.py --max-steps-per-epoch 300
+```
+
+### Observations
+
+- **X-Trend beats the no-context baseline and all benchmarks**, most clearly in 2018-2023
+  (Sharpe 2.28 vs 1.70 for the baseline and 0.47 for TSMOM). That matches the paper's
+  main claim that the context set helps most in recent, regime-changing markets.
+- **X-Trend-Q** also beats the baseline, but with a deeper drawdown.
+- **X-Trend-G was unstable at this budget.** In the 2005-2010 window its yearly Sharpe
+  equals Long's exactly, so the ensemble appears to have collapsed into an always-long
+  position, which drove the 2008 loss and the -93% drawdown. With only 2 models per
+  window, one failed model can dominate a window.
+- All numbers are before transaction costs, and each model is a single run with a small
+  ensemble, so close gaps (e.g. baseline 1.66 vs X-Trend-Q 1.76) may not survive a rerun.
+
+### Where the results are
+
+`results/replication/`:
+
+- `tables/main_results.md` / `.csv`: the table above
+- `tables/<run>_metrics.csv`: full metrics for each model vs. benchmarks
+- `tables/<run>_sharpe_by_year.csv`: Sharpe per calendar year
+- `tables/<run>_training_log.csv`: every model trained (settings, validation loss, epochs)
+- `figures/<run>_returns.png`: cumulative return, rolling Sharpe and drawdown
+
+Run names: `baseline_sharpe`, `xtrend_sharpe_cpd21_c10` (X-Trend),
+`xtrend_gauss_cpd21_c10` (X-Trend-G), `xtrend_qre_cpd21_c10` (X-Trend-Q).
