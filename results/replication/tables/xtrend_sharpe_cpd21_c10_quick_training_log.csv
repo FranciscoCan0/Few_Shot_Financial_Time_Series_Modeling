@@ -1,0 +1,2 @@
+test_start,repeat,setting,dropout,hidden_size,batch_size,max_grad_norm,seed,val_loss,epochs,kept
+2020-01-01,0,0,0.4,64,128,0.01,1031998433,-0.5759655237197876,2,True
