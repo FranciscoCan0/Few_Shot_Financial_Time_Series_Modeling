@@ -7,6 +7,8 @@ enough history to use), backtest 1995-2023, and compare against Long, TSMOM and 
 
 Team Members: Cole Pridgen, Francisco Canova, Noah Apteker
 
+- **Note for this submission:** to finish training before the deadline, we ran a reduced version of the paper's setup (ensembles of 2 models with 1 hyperparameter draw each and at most 300 batches per epoch, vs. the paper's 10 x 10 search). The full search for all 48 variants would take weeks on our single GPU. See [Preliminary Replication Results](#preliminary-replication-results) for the exact settings.
+
 Where things stand:
 
 - Data download, feature building and change-point detection (CPD) work.
